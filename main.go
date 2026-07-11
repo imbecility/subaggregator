@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/imbecility/subaggregator/dedup"
@@ -56,8 +57,12 @@ func main() {
 	// Всегда печатаем разбивку ошибок — это важная диагностика
 	stats.Print()
 
+	if err := writeErrorFiles(results); err != nil {
+		fmt.Fprintf(os.Stderr, "[WARN] Не удалось записать файлы ошибок: %v\n", err)
+	}
+
 	if len(output) == 0 {
-		fmt.Fprintln(os.Stderr, "[ERROR] Результат пуст — ничего не записано")
+		fmt.Fprintln(os.Stderr, "[ERROR] Результат пуст")
 		os.Exit(1)
 	}
 
@@ -70,6 +75,85 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[ERROR] Flush: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// writeErrorFiles создаёт директорию errors/ и пишет файлы по категориям.
+func writeErrorFiles(results []fetcher.Result) error {
+	dir := "errors"
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	// Открываем файлы для каждой категории
+	writers := make(map[fetcher.ErrorKind]*bufio.Writer)
+	files := make(map[fetcher.ErrorKind]*os.File)
+
+	open := func(kind fetcher.ErrorKind) (*bufio.Writer, error) {
+		if w, ok := writers[kind]; ok {
+			return w, nil
+		}
+		name := filepath.Join(dir, string(kind)+".txt")
+		f, err := os.Create(name)
+		if err != nil {
+			return nil, err
+		}
+		files[kind] = f
+		w := bufio.NewWriterSize(f, 256*1024)
+		writers[kind] = w
+		return w, nil
+	}
+
+	for _, r := range results {
+		if r.Err == nil {
+			continue
+		}
+
+		w, err := open(r.ErrKind)
+		if err != nil {
+			continue
+		}
+
+		switch r.ErrKind {
+		case fetcher.KindNoNodes:
+			// Для no_nodes пишем полную диагностику: URL + Content-Type + preview
+			fmt.Fprintf(w, "=== %s\n", r.URL)
+			if r.ContentType != "" {
+				fmt.Fprintf(w, "Content-Type: %s\n", r.ContentType)
+			}
+			if r.RawPreview != r.BodyPreview && r.RawPreview != "" {
+				fmt.Fprintf(w, "--- RAW (до base64-декодирования) ---\n%s\n", r.RawPreview)
+				fmt.Fprintf(w, "--- DECODED ---\n%s\n", r.BodyPreview)
+			} else if r.BodyPreview != "" {
+				fmt.Fprintf(w, "--- BODY ---\n%s\n", r.BodyPreview)
+			}
+			fmt.Fprintln(w)
+
+		default:
+			// Для остальных достаточно URL + текст ошибки
+			fmt.Fprintf(w, "%s\t%v\n", r.URL, r.Err)
+		}
+	}
+
+	// Flush и закрыть все файлы
+	for kind, w := range writers {
+		if err := w.Flush(); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] flush %s: %v\n", kind, err)
+		}
+	}
+	for _, f := range files {
+		_ = f.Close()
+	}
+
+	// Вывести что записали
+	fmt.Fprintln(os.Stderr, "[INFO] Файлы ошибок записаны в errors/:")
+	for kind, f := range files {
+		stat, _ := f.Stat()
+		if stat != nil && stat.Size() > 0 {
+			fmt.Fprintf(os.Stderr, "  errors/%s.txt\n", kind)
+		}
+	}
+
+	return nil
 }
 
 func loadURLs() []string {

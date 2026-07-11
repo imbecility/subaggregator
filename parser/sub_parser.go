@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -11,29 +12,42 @@ import (
 )
 
 const (
-	userAgent   = "v2rayNG/1.8.5"
-	timeout     = 20 * time.Second
-	maxBodySize = 100 * 1024 * 1024 // 100 МБ — защита от раздутых ответов
+	userAgent      = "v2rayNG/1.8.5"
+	timeout        = 20 * time.Second
+	maxBodySize    = 10 * 1024 * 1024 // 10 МБ
+	previewMaxSize = 512              // байт для диагностики
 )
 
-// allowedPrefixes — поддерживаемые протоколы (включая hy2:// alias)
 var allowedPrefixes = []string{
 	"vless://",
 	"hysteria2://",
 	"hy2://",
 	"hysteria://",
-	"trojan://",
 }
 
 var httpClient = &http.Client{
 	Timeout: timeout,
 	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, //nolint:gosec // намеренно: подписки могут иметь невалидные сертификаты
+		},
 		MaxIdleConns:        300,
 		MaxIdleConnsPerHost: 10,
 		IdleConnTimeout:     30 * time.Second,
 		DisableKeepAlives:   false,
 	},
+	// CheckRedirect не переопределяем — дефолтное поведение Go: до 10 редиректов
 }
+
+// NoNodesErr возникает когда подписка загружена успешно, но не содержит нужных протоколов.
+// Содержит preview тела для ручного анализа.
+type NoNodesErr struct {
+	ContentType string
+	Preview     string // первые 512 байт (после попытки base64-декодирования)
+	RawPreview  string // первые 512 байт до декодирования
+}
+
+func (e *NoNodesErr) Error() string { return "no supported nodes found" }
 
 func decodeBase64(data string) ([]byte, error) {
 	data = strings.TrimSpace(data)
@@ -66,6 +80,15 @@ func ParseLinks(rawText string) []string {
 	return results
 }
 
+func preview(s string) string {
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	if len(runes) > previewMaxSize {
+		return string(runes[:previewMaxSize]) + "…"
+	}
+	return s
+}
+
 // FetchSubscription загружает подписку, декодирует Base64 при необходимости.
 func FetchSubscription(subURL string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -81,6 +104,7 @@ func FetchSubscription(subURL string) ([]string, error) {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "*/*")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -97,9 +121,10 @@ func FetchSubscription(subURL string) ([]string, error) {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 
+	contentType := resp.Header.Get("Content-Type")
 	rawText := string(bodyBytes)
 
-	// Если явных URI нет — скорее всего Base64
+	// Пробуем найти ссылки в сыром виде
 	hasLinks := false
 	for _, p := range allowedPrefixes {
 		if strings.Contains(strings.ToLower(rawText), p) {
@@ -107,15 +132,39 @@ func FetchSubscription(subURL string) ([]string, error) {
 			break
 		}
 	}
+
+	rawPreview := preview(rawText)
+	decodedText := rawText
+
 	if !hasLinks {
+		// Пробуем base64
 		if decoded, err := decodeBase64(rawText); err == nil {
-			rawText = string(decoded)
+			decodedText = string(decoded)
+			// Повторная проверка после декодирования
+			for _, p := range allowedPrefixes {
+				if strings.Contains(strings.ToLower(decodedText), p) {
+					hasLinks = true
+					break
+				}
+			}
 		}
 	}
 
-	links := ParseLinks(rawText)
+	if !hasLinks {
+		return nil, &NoNodesErr{
+			ContentType: contentType,
+			Preview:     preview(decodedText),
+			RawPreview:  rawPreview,
+		}
+	}
+
+	links := ParseLinks(decodedText)
 	if len(links) == 0 {
-		return nil, fmt.Errorf("no supported nodes found")
+		return nil, &NoNodesErr{
+			ContentType: contentType,
+			Preview:     preview(decodedText),
+			RawPreview:  rawPreview,
+		}
 	}
 	return links, nil
 }
