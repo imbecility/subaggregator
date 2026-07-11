@@ -17,8 +17,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "[INFO] Загружаем %d подписок (concurrency=150)...\n", len(urls))
-	results := fetcher.FetchAll(urls, 150)
+	fmt.Fprintf(os.Stderr, "[INFO] Загружаем %d подписок (global=150, per-domain=5)...\n", len(urls))
+
+	// global=150 горутин, но не более 5 одновременно к одному хосту
+	results, stats := fetcher.FetchAll(urls, 150, 5)
 
 	d := dedup.NewSet()
 	var totalLinks, failedSubs int
@@ -27,10 +29,6 @@ func main() {
 	for _, r := range results {
 		if r.Err != nil {
 			failedSubs++
-			// Подробный лог ошибок — только в отладочном режиме
-			if os.Getenv("AGGREGATOR_VERBOSE") != "" {
-				fmt.Fprintf(os.Stderr, "[WARN] %s: %v\n", r.URL, r.Err)
-			}
 			continue
 		}
 		for _, link := range r.Links {
@@ -54,6 +52,9 @@ func main() {
 		totalLinks, uniqueCount, dupeCount,
 		float64(dupeCount)/float64(max(totalLinks, 1))*100,
 	)
+
+	// Всегда печатаем разбивку ошибок — это важная диагностика
+	stats.Print()
 
 	if len(output) == 0 {
 		fmt.Fprintln(os.Stderr, "[ERROR] Результат пуст — ничего не записано")
