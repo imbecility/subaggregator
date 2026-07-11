@@ -14,8 +14,8 @@ import (
 const (
 	userAgent      = "v2rayNG/1.8.5"
 	timeout        = 20 * time.Second
-	maxBodySize    = 10 * 1024 * 1024
-	previewMaxSize = 512
+	maxBodySize    = 100 * 1024 * 1024
+	previewMaxSize = 1024
 )
 
 // allowedPrefixes — поддерживаемые протоколы агрегатором.
