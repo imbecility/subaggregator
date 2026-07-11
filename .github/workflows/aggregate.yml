@@ -1,0 +1,56 @@
+name: Aggregate Subscriptions
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # каждые 6 часов
+  workflow_dispatch:          # ручной запуск
+
+permissions:
+  contents: write
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache-dependency-path: aggregator/go.sum
+
+      - name: Build aggregator
+        run: |
+          cd aggregator
+          go build -o /tmp/aggregator .
+
+      - name: Run aggregator
+        run: |
+          /tmp/aggregator subscriptions.txt > sub.txt
+          LINES=$(wc -l < sub.txt)
+          echo "Output lines: $LINES"
+          if [ "$LINES" -lt 100 ]; then
+            echo "::warning::Подозрительно мало конфигов: $LINES"
+          fi
+
+      - name: Job summary
+        run: |
+          echo "## Aggregation Result" >> $GITHUB_STEP_SUMMARY
+          echo "- Total unique configs: $(wc -l < sub.txt)" >> $GITHUB_STEP_SUMMARY
+          echo "- Updated at: $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit & Push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sub.txt
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update subscription $(date -u '+%Y-%m-%d %H:%M') UTC [skip ci]"
+            git push
+          else
+            echo "No changes — subscription is up to date"
+          fi
