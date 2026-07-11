@@ -21,16 +21,16 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.26'
-          cache-dependency-path: aggregator/go.sum
+          cache-dependency-path: subaggregator/go.sum
 
-      - name: Build aggregator
+      - name: Build subaggregator
         run: |
-          cd aggregator
-          go build -o /tmp/aggregator .
+          cd subaggregator
+          go build -o /tmp/subaggregator .
 
-      - name: Run aggregator
+      - name: Run subaggregator
         run: |
-          /tmp/aggregator subscriptions.txt > sub.txt
+          /tmp/subaggregator subscriptions.txt > sub.txt
           LINES=$(wc -l < sub.txt)
           echo "Output lines: $LINES"
           if [ "$LINES" -lt 100 ]; then
