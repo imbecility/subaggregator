@@ -31,39 +31,54 @@ jobs:
       - name: Run subaggregator
         run: |
           /tmp/subaggregator subscriptions.txt > sub.txt
+          LINES=$(wc -l < sub.txt)
+          SIZE=$(du -sh sub.txt | cut -f1)
+          echo "Lines: $LINES, Size: $SIZE"
+
+      - name: Publish to Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Создаём релиз с тегом "sub" если ещё не существует
+          gh release create sub \
+            --title "Aggregated Subscription" \
+            --notes "Автообновляемая агрегированная подписка. Не редактировать вручную." \
+            --prerelease \
+            2>/dev/null || true
+
+          # --clobber: заменяем файл если уже есть в релизе
+          gh release upload sub sub.txt --clobber
 
       - name: Upload error reports
-        if: always()   # загружаем даже если aggregator завершился с ошибкой
-        uses: actions/upload-artifact@v6
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: aggregator-errors-${{ github.run_number }}
+          name: subaggregator-errors-${{ github.run_number }}
           path: errors/
           if-no-files-found: ignore
           retention-days: 7
 
       - name: Job summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          LINES=$(wc -l < sub.txt)
+          SIZE=$(du -sh sub.txt | cut -f1)
+          URL="https://github.com/${{ github.repository }}/releases/download/sub/sub.txt"
+
           echo "## Aggregation Result" >> $GITHUB_STEP_SUMMARY
-          echo "- Total unique configs: $(wc -l < sub.txt)" >> $GITHUB_STEP_SUMMARY
-          echo "- Updated at: $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Параметр | Значение |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Уникальных конфигов | $LINES |" >> $GITHUB_STEP_SUMMARY
+          echo "| Размер файла | $SIZE |" >> $GITHUB_STEP_SUMMARY
+          echo "| Обновлено | $(date -u '+%Y-%m-%d %H:%M UTC') |" >> $GITHUB_STEP_SUMMARY
+          echo "| URL подписки | [\`sub.txt\`]($URL) |" >> $GITHUB_STEP_SUMMARY
+
           if [ -d errors ]; then
-            echo "## Error Files" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## Ошибки" >> $GITHUB_STEP_SUMMARY
             for f in errors/*.txt; do
               [ -f "$f" ] || continue
-              lines=$(wc -l < "$f")
-              echo "- \`$f\`: $lines записей" >> $GITHUB_STEP_SUMMARY
+              echo "- \`$(basename $f)\`: $(wc -l < $f) записей" >> $GITHUB_STEP_SUMMARY
             done
-          fi
-
-      - name: Commit & Push
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add sub.txt
-          if ! git diff --staged --quiet; then
-            git commit -m "chore: update subscription $(date -u '+%Y-%m-%d %H:%M') UTC [skip ci]"
-            git push
-          else
-            echo "No changes — subscription is up to date"
           fi
