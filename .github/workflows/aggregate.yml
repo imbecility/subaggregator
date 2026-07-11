@@ -25,7 +25,7 @@ jobs:
 
       - name: Build subaggregator
         run: |
-          cd subaggregator
+          # cd subaggregator
           go build -o /tmp/subaggregator .
 
       - name: Run subaggregator
