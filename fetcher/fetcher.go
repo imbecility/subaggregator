@@ -14,6 +14,7 @@ import (
 	"github.com/imbecility/subaggregator/parser"
 )
 
+// ErrorKind — категория ошибки для статистики.
 type ErrorKind string
 
 const (
@@ -40,10 +41,11 @@ type Result struct {
 	ContentType string
 }
 
+// Stats — агрегированная статистика по ошибкам.
 type Stats struct {
 	mu      sync.Mutex
 	counts  map[ErrorKind]int
-	samples map[ErrorKind]string
+	samples map[ErrorKind]string // по одному примеру на каждый вид
 }
 
 func NewStats() *Stats {
@@ -90,6 +92,7 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
+// classifyError определяет тип ошибки по её содержимому.
 func classifyError(err error) ErrorKind {
 	if err == nil {
 		return ""
@@ -138,6 +141,7 @@ func classifyError(err error) ErrorKind {
 	return KindOther
 }
 
+// domainLimiter ограничивает число одновременных запросов к одному хосту.
 type domainLimiter struct {
 	mu   sync.Mutex
 	sems map[string]chan struct{}
@@ -173,6 +177,8 @@ func extractRootDomain(rawURL string) string {
 	if err != nil {
 		return rawURL
 	}
+	// Группируем поддомены под корневой домен, чтобы лимит был на всё семейство.
+	// user1.serv00.net и user2.serv00.net — один хост для rate-limiting.
 	host := strings.ToLower(u.Hostname())
 	parts := strings.Split(host, ".")
 	if len(parts) >= 2 {
@@ -189,6 +195,7 @@ func FetchAll(urls []string, globalConcurrency, perDomainConcurrency int) ([]Res
 
 	results := make([]Result, len(urls))
 	var wg sync.WaitGroup
+
 	var done atomic.Int64
 	total := int64(len(urls))
 
@@ -236,6 +243,7 @@ func fetchWithRetry(subURL string, maxRetries int) ([]string, error) {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
+			// Экспоненциальный бэкофф с джиттером
 			sleep := time.Duration(attempt*attempt)*time.Second + time.Duration(attempt*300)*time.Millisecond
 			time.Sleep(sleep)
 		}

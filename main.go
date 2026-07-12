@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"compress/gzip"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,10 +11,29 @@ import (
 
 	"github.com/imbecility/subaggregator/dedup"
 	"github.com/imbecility/subaggregator/fetcher"
+	"github.com/imbecility/subaggregator/publisher"
 )
 
 func main() {
-	urls := loadURLs()
+	var (
+		outputPath    string
+		gitverseRepo  string
+		gitverseToken string
+		gitverseTag   string
+	)
+
+	flag.StringVar(&outputPath, "output", "sub.txt.gz", "Путь к выходному файлу (gzip-сжатый)")
+	flag.StringVar(&gitverseRepo, "gitverse-repo", "", "Репозиторий GitVerse в формате owner/repo")
+	flag.StringVar(&gitverseToken, "gitverse-token", "", "API-токен GitVerse")
+	flag.StringVar(&gitverseTag, "gitverse-tag", "sub", "Тег релиза на GitVerse")
+	flag.Parse()
+
+	subsFile := "subscriptions.txt"
+	if flag.NArg() > 0 {
+		subsFile = flag.Arg(0)
+	}
+
+	urls := loadURLs(subsFile)
 	if len(urls) == 0 {
 		fmt.Fprintln(os.Stderr, "[ERROR] Список подписок пуст")
 		os.Exit(1)
@@ -54,7 +75,6 @@ func main() {
 		float64(dupeCount)/float64(max(totalLinks, 1))*100,
 	)
 
-	// Всегда печатаем разбивку ошибок — это важная диагностика
 	stats.Print()
 
 	if err := writeErrorFiles(results); err != nil {
@@ -66,15 +86,46 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Результат — в stdout (GitHub Actions перенаправит в файл)
-	w := bufio.NewWriterSize(os.Stdout, 4*1024*1024)
-	for _, link := range output {
-		fmt.Fprintln(w, link)
-	}
-	if err := w.Flush(); err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR] Flush: %v\n", err)
+	if err := writeGzip(outputPath, output); err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Запись файла: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Fprintf(os.Stderr, "[INFO] Записан %s (%d уникальных конфигов)\n", outputPath, uniqueCount)
+
+	// GitVerse публикация — нефатальна, только предупреждаем при ошибке
+	if gitverseRepo != "" && gitverseToken != "" {
+		fmt.Fprintln(os.Stderr, "[INFO] Публикуем на GitVerse...")
+		if err := publisher.PublishToGitverse(gitverseToken, gitverseRepo, gitverseTag, outputPath); err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] GitVerse: %v\n", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "[INFO] GitVerse: опубликовано успешно")
+		}
+	}
+}
+
+// writeGzip сжимает строки в gzip-файл с максимальным уровнем сжатия.
+func writeGzip(path string, lines []string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewWriterLevel(f, gzip.BestCompression)
+	if err != nil {
+		return err
+	}
+
+	bw := bufio.NewWriterSize(gz, 4*1024*1024)
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(bw, line); err != nil {
+			return err
+		}
+	}
+	if err := bw.Flush(); err != nil {
+		return err
+	}
+	return gz.Close() // финализирует gzip-поток (чексумма и ISIZE)
 }
 
 // writeErrorFiles создаёт директорию errors/ и пишет файлы по категориям.
@@ -156,12 +207,7 @@ func writeErrorFiles(results []fetcher.Result) error {
 	return nil
 }
 
-func loadURLs() []string {
-	filename := "subscriptions.txt"
-	if len(os.Args) > 1 {
-		filename = os.Args[1]
-	}
-
+func loadURLs(filename string) []string {
 	f, err := os.Open(filename)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] Не удалось открыть %s: %v\n", filename, err)

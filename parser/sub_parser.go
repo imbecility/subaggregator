@@ -14,7 +14,7 @@ import (
 const (
 	userAgent      = "v2rayNG/1.8.5"
 	timeout        = 20 * time.Second
-	maxBodySize    = 100 * 1024 * 1024
+	maxBodySize    = 200 * 1024 * 1024
 	previewMaxSize = 1024
 )
 

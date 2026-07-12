@@ -202,7 +202,6 @@ https://mygala.ru/vpn/subscription.txt
 https://openproxylist.com/v2ray/
 https://openproxylist.com/v2ray/rawlist/subscribe
 https://openproxylist.com/v2ray/rawlist/text
-https://proxy.v2gh.com/https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub
 https://proxypool.link/vmess/sub
 https://qiaomenzhuanfx.netlify.app
 https://raw.githubusercontent.com/0i0/deepme-crawler/main/crawled.repos/T.txt
