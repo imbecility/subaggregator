@@ -2,8 +2,8 @@ name: Aggregate Subscriptions
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # каждые 6 часов
-  workflow_dispatch:          # ручной запуск
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -21,33 +21,35 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.26'
-          cache-dependency-path: subaggregator/go.sum
+          cache-dependency-path: go.sum
 
       - name: Build subaggregator
-        run: |
-          # cd subaggregator
-          go build -o /tmp/subaggregator .
+        run: go build -o /tmp/subaggregator .
 
       - name: Run subaggregator
+        env:
+          GITVERSE_TOKEN: ${{ secrets.GITVERSE_TOKEN }}
         run: |
-          /tmp/subaggregator subscriptions.txt > sub.txt
-          LINES=$(wc -l < sub.txt)
-          SIZE=$(du -sh sub.txt | cut -f1)
+          /tmp/subaggregator \
+            --output sub.txt.gz \
+            --gitverse-repo "${{ vars.GITVERSE_REPO }}" \
+            --gitverse-token "$GITVERSE_TOKEN" \
+            subscriptions.txt
+
+          SIZE=$(du -sh sub.txt.gz | cut -f1)
+          LINES=$(zcat sub.txt.gz | wc -l)
           echo "Lines: $LINES, Size: $SIZE"
 
-      - name: Publish to Release
+      - name: Publish to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Создаём релиз с тегом "sub" если ещё не существует
           gh release create sub \
             --title "Aggregated Subscription" \
             --notes "Автообновляемая агрегированная подписка. Не редактировать вручную." \
-            --prerelease \
             2>/dev/null || true
 
-          # --clobber: заменяем файл если уже есть в релизе
-          gh release upload sub sub.txt --clobber
+          gh release upload sub sub.txt.gz --clobber
 
       - name: Upload error reports
         if: always()
@@ -62,17 +64,24 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          LINES=$(wc -l < sub.txt)
-          SIZE=$(du -sh sub.txt | cut -f1)
-          URL="https://github.com/${{ github.repository }}/releases/download/sub/sub.txt"
+          LINES=$(zcat sub.txt.gz | wc -l)
+          SIZE=$(du -sh sub.txt.gz | cut -f1)
+          GH_URL="https://github.com/${{ github.repository }}/releases/download/sub/sub.txt.gz"
 
           echo "## Aggregation Result" >> $GITHUB_STEP_SUMMARY
           echo "| Параметр | Значение |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Уникальных конфигов | $LINES |" >> $GITHUB_STEP_SUMMARY
-          echo "| Размер файла | $SIZE |" >> $GITHUB_STEP_SUMMARY
+          echo "| Размер архива | $SIZE |" >> $GITHUB_STEP_SUMMARY
           echo "| Обновлено | $(date -u '+%Y-%m-%d %H:%M UTC') |" >> $GITHUB_STEP_SUMMARY
-          echo "| URL подписки | [\`sub.txt\`]($URL) |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub подписка | [\`sub.txt.gz\`]($GH_URL) |" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "${{ vars.GITVERSE_REPO }}" ]; then
+            GV_USER=$(echo "${{ vars.GITVERSE_REPO }}" | cut -d/ -f1)
+            GV_REPO=$(echo "${{ vars.GITVERSE_REPO }}" | cut -d/ -f2)
+            GV_URL="https://gitverse.ru/${GV_USER}/${GV_REPO}/releases"
+            echo "| GitVerse подписка | [${{ vars.GITVERSE_REPO }} releases]($GV_URL) |" >> $GITHUB_STEP_SUMMARY
+          fi
 
           if [ -d errors ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
